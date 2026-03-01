@@ -1,2 +1,0 @@
-/usr/bin/ar qc libziplib.a CMakeFiles/ziplib.dir/src/zip_records.c.o
-/usr/bin/ranlib libziplib.a
