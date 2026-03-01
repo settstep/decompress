@@ -21,14 +21,20 @@ cmake --build build
 ## Aufruf
 
 ```bash
-./decompress <zip-datei>
+./decompress [-debug] <zip-datei>
 ```
 
 unter Windows z. B.:
 
 ```powershell
 .\build\decompress.exe .\test.zip
+.\build\decompress.exe -debug .\test.zip
 ```
+
+## Debug-Modus
+
+- Mit `-debug` wird im aktuellen Arbeitsverzeichnis die Datei `debug.log` erzeugt.
+- In `debug.log` werden die Schritte des Programms (Einlesen, Record-Parsing, Entpacken, Fehlerursachen) protokolliert.
 
 ## Rückgabecodes (`enum ZipStatus`)
 
