@@ -11,3 +11,9 @@ add_executable(decompress
 )
 
 target_include_directories(decompress PRIVATE src)
+
+find_package(ZLIB)
+if(ZLIB_FOUND)
+    target_compile_definitions(decompress PRIVATE HAVE_ZLIB)
+    target_link_libraries(decompress PRIVATE ZLIB::ZLIB)
+endif()
