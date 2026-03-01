@@ -10,8 +10,16 @@ Kleines Konsolenprogramm in C mit CMake zum Einlesen und Entpacken einer ZIP-Dat
   - Central Directory Record
   - End of Central Directory Record
 - Wenn Strukturen oder Signaturen nicht wie erwartet sind, wird ein passender Fehlercode zurückgegeben.
+- Unterstützte Kompressionsmethoden:
+  - `0` (STORE)
+  - `8` (DEFLATE, nur wenn mit `zlib` gebaut)
 
 ## Build
+
+`zlib` ist optional:
+
+- Mit `zlib`: STORE + DEFLATE
+- Ohne `zlib`: nur STORE (`DEFLATE` liefert `ZIP_ERR_UNSUPPORTED`)
 
 ```bash
 cmake -S . -B build
@@ -50,5 +58,4 @@ unter Windows z. B.:
 
 ## Hinweis
 
-Aktuell wird nur `compression_method = 0` (STORE, unkomprimiert) entpackt.
-Für andere Verfahren (z. B. DEFLATE) liefert das Programm `ZIP_ERR_UNSUPPORTED`.
+Nicht unterstützt sind weiterhin ZIP-Varianten mit gesetztem Data-Descriptor-Bit (General Purpose Bit 3) sowie weitere Kompressionsmethoden.

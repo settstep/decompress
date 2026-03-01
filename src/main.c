@@ -4,8 +4,135 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#ifdef HAVE_ZLIB
+#include <zlib.h>
+#endif
+
+#ifdef _WIN32
+#include <direct.h>
+#include <sys/stat.h>
+#define MAKE_DIR(path) _mkdir(path)
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
+#define MAKE_DIR(path) mkdir(path, 0755)
+#endif
 
 static FILE* g_debug_log = NULL;
+static void sanitize_name(char* name);
+
+static int dir_exists(const char* path) {
+    struct stat st;
+    if (!path) {
+        return 0;
+    }
+    if (stat(path, &st) != 0) {
+        return 0;
+    }
+    return (st.st_mode & S_IFDIR) != 0;
+}
+
+static const char* path_basename_ptr(const char* path) {
+    const char* base = path;
+    if (!path) {
+        return NULL;
+    }
+    for (const char* p = path; *p != '\0'; ++p) {
+        if (*p == '/' || *p == '\\') {
+            base = p + 1;
+        }
+    }
+    return base;
+}
+
+static char* build_output_directory_name(const char* input_path) {
+    const char* base = path_basename_ptr(input_path);
+    size_t len;
+    char* out;
+    char* dot;
+
+    if (!base || *base == '\0') {
+        return NULL;
+    }
+
+    len = strlen(base);
+    out = (char*)malloc(len + 1);
+    if (!out) {
+        return NULL;
+    }
+
+    memcpy(out, base, len + 1);
+    dot = strrchr(out, '.');
+    if (dot) {
+        *dot = '\0';
+    }
+
+    if (out[0] == '\0') {
+        free(out);
+        return NULL;
+    }
+
+    sanitize_name(out);
+    return out;
+}
+
+static char* build_debug_log_path(const char* input_path) {
+    const char* last_sep = NULL;
+    const char* log_name = "debug.log";
+    size_t log_name_len = strlen(log_name);
+
+    if (!input_path || *input_path == '\0') {
+        char* out = (char*)malloc(log_name_len + 1);
+        if (!out) {
+            return NULL;
+        }
+        memcpy(out, log_name, log_name_len + 1);
+        return out;
+    }
+
+    for (const char* p = input_path; *p != '\0'; ++p) {
+        if (*p == '/' || *p == '\\') {
+            last_sep = p;
+        }
+    }
+
+    if (!last_sep) {
+        char* out = (char*)malloc(log_name_len + 1);
+        if (!out) {
+            return NULL;
+        }
+        memcpy(out, log_name, log_name_len + 1);
+        return out;
+    }
+
+    {
+        size_t dir_len = (size_t)(last_sep - input_path + 1);
+        char* out = (char*)malloc(dir_len + log_name_len + 1);
+        if (!out) {
+            return NULL;
+        }
+        memcpy(out, input_path, dir_len);
+        memcpy(out + dir_len, log_name, log_name_len + 1);
+        return out;
+    }
+}
+
+static ZipStatus ensure_output_directory(const char* output_dir) {
+    if (!output_dir || *output_dir == '\0') {
+        return ZIP_ERR_INVALID_ARG;
+    }
+
+    if (dir_exists(output_dir)) {
+        return ZIP_OK;
+    }
+
+    if (MAKE_DIR(output_dir) != 0) {
+        return ZIP_ERR_IO;
+    }
+
+    return ZIP_OK;
+}
 
 static void debug_log_step(const char* format, ...) {
     va_list args;
@@ -96,29 +223,87 @@ static ZipStatus read_file_bytes(const char* path, uint8_t** out_data, size_t* o
     return ZIP_OK;
 }
 
-static ZipStatus write_output_file(const char* name, const uint8_t* data, size_t size) {
+static ZipStatus write_output_file(const char* output_dir, const char* name, const uint8_t* data, size_t size) {
     FILE* out;
+    size_t path_len;
+    char* out_path;
 
-    out = fopen(name, "wb");
+    if (!output_dir || !name) {
+        return ZIP_ERR_INVALID_ARG;
+    }
+
+    path_len = strlen(output_dir) + 1 + strlen(name) + 1;
+    out_path = (char*)malloc(path_len);
+    if (!out_path) {
+        return ZIP_ERR_MEMORY;
+    }
+
+    snprintf(out_path, path_len, "%s/%s", output_dir, name);
+
+    out = fopen(out_path, "wb");
     if (!out) {
-        debug_log_step("Ausgabedatei konnte nicht erstellt werden: %s", name);
+        debug_log_step("Ausgabedatei konnte nicht erstellt werden: %s", out_path);
+        free(out_path);
         return ZIP_ERR_IO;
     }
 
     if (size > 0 && fwrite(data, 1, size, out) != size) {
         fclose(out);
-        debug_log_step("Schreibfehler in Ausgabedatei: %s", name);
+        debug_log_step("Schreibfehler in Ausgabedatei: %s", out_path);
+        free(out_path);
         return ZIP_ERR_IO;
     }
 
     fclose(out);
+    free(out_path);
     return ZIP_OK;
+}
+
+static ZipStatus decompress_deflate(const uint8_t* in, size_t in_size, uint8_t* out, size_t out_size) {
+#ifdef HAVE_ZLIB
+    z_stream stream;
+    int zret;
+
+    memset(&stream, 0, sizeof(stream));
+    stream.next_in = (Bytef*)in;
+    stream.avail_in = (uInt)in_size;
+    stream.next_out = (Bytef*)out;
+    stream.avail_out = (uInt)out_size;
+
+    zret = inflateInit2(&stream, -MAX_WBITS);
+    if (zret != Z_OK) {
+        debug_log_step("inflateInit2 fehlgeschlagen: %d", zret);
+        return ZIP_ERR_DECOMPRESS;
+    }
+
+    zret = inflate(&stream, Z_FINISH);
+    inflateEnd(&stream);
+
+    if (zret != Z_STREAM_END || stream.total_out != out_size) {
+        debug_log_step(
+            "DEFLATE fehlgeschlagen: zret=%d total_out=%lu erwartet=%zu",
+            zret,
+            (unsigned long)stream.total_out,
+            out_size);
+        return ZIP_ERR_DECOMPRESS;
+    }
+
+    return ZIP_OK;
+#else
+    (void)in;
+    (void)in_size;
+    (void)out;
+    (void)out_size;
+    debug_log_step("DEFLATE nicht verfuegbar: ohne ZLIB gebaut");
+    return ZIP_ERR_UNSUPPORTED;
+#endif
 }
 
 static ZipStatus extract_one(
     const uint8_t* data,
     size_t size,
-    const CentralDirectoryRecord* cdr) {
+    const CentralDirectoryRecord* cdr,
+    const char* output_dir) {
     LocalFileRecord lfh;
     size_t next_offset = 0;
     ZipStatus st;
@@ -147,7 +332,7 @@ static ZipStatus extract_one(
         return ZIP_ERR_UNSUPPORTED;
     }
 
-    if (lfh.compression_method != 0) {
+    if (lfh.compression_method != 0 && lfh.compression_method != 8) {
         debug_log_step("Nicht unterstuetzte Kompressionsmethode: %u", lfh.compression_method);
         return ZIP_ERR_UNSUPPORTED;
     }
@@ -176,16 +361,26 @@ static ZipStatus extract_one(
         return ZIP_ERR_MEMORY;
     }
 
-    if (lfh.compressed_size != cdr->uncompressed_size) {
-        free(out);
-        free(file_name);
-        debug_log_step("Formatfehler: compressed_size (%u) != uncompressed_size (%u) bei STORE", lfh.compressed_size, cdr->uncompressed_size);
-        return ZIP_ERR_BAD_FORMAT;
+    if (lfh.compression_method == 0) {
+        if (lfh.compressed_size != cdr->uncompressed_size) {
+            free(out);
+            free(file_name);
+            debug_log_step("Formatfehler: compressed_size (%u) != uncompressed_size (%u) bei STORE", lfh.compressed_size, cdr->uncompressed_size);
+            return ZIP_ERR_BAD_FORMAT;
+        }
+        memcpy(out, lfh.compressed_data, cdr->uncompressed_size);
+        debug_log_step("STORE-Daten kopiert: %u Bytes", cdr->uncompressed_size);
+    } else {
+        st = decompress_deflate(lfh.compressed_data, lfh.compressed_size, out, cdr->uncompressed_size);
+        if (st != ZIP_OK) {
+            free(out);
+            free(file_name);
+            return st;
+        }
+        debug_log_step("DEFLATE-Daten dekomprimiert: %u Bytes", cdr->uncompressed_size);
     }
-    memcpy(out, lfh.compressed_data, cdr->uncompressed_size);
-    debug_log_step("STORE-Daten kopiert: %u Bytes", cdr->uncompressed_size);
 
-    st = write_output_file(file_name, out, cdr->uncompressed_size);
+    st = write_output_file(output_dir, file_name, out, cdr->uncompressed_size);
     debug_log_step("Ausgabe geschrieben: %s (Status: %s)", file_name, zip_status_to_string(st));
     free(out);
     free(file_name);
@@ -201,6 +396,8 @@ int main(int argc, char** argv) {
     EndOfCentralDirectoryRecord eocd;
     ZipStatus st;
     const char* zip_path = NULL;
+    char* output_dir = NULL;
+    char* debug_path = NULL;
     int debug_enabled = 0;
     int exit_code = ZIP_OK;
 
@@ -224,14 +421,36 @@ int main(int argc, char** argv) {
         return ZIP_ERR_INVALID_ARG;
     }
 
+    output_dir = build_output_directory_name(zip_path);
+    if (!output_dir) {
+        fprintf(stderr, "Ausgabeordner konnte nicht bestimmt werden.\n");
+        return ZIP_ERR_INVALID_ARG;
+    }
+
+    st = ensure_output_directory(output_dir);
+    if (st != ZIP_OK) {
+        fprintf(stderr, "Ausgabeordner konnte nicht erstellt werden: %s\n", output_dir);
+        free(output_dir);
+        return st;
+    }
+
     if (debug_enabled) {
-        g_debug_log = fopen("debug.log", "w");
+        debug_path = build_debug_log_path(zip_path);
+        if (!debug_path) {
+            free(output_dir);
+            return ZIP_ERR_MEMORY;
+        }
+
+        g_debug_log = fopen(debug_path, "w");
         if (!g_debug_log) {
             fprintf(stderr, "debug.log konnte nicht erstellt werden.\n");
+            free(debug_path);
+            free(output_dir);
             return ZIP_ERR_IO;
         }
         debug_log_step("Debug-Modus aktiviert");
         debug_log_step("ZIP-Datei: %s", zip_path);
+        debug_log_step("Ausgabeordner: %s", output_dir);
     }
 
     debug_log_step("Starte byteweises Einlesen der Datei");
@@ -291,7 +510,7 @@ int main(int argc, char** argv) {
             cdr.uncompressed_size,
             cdr.local_header_offset);
 
-        st = extract_one(data, size, &cdr);
+        st = extract_one(data, size, &cdr, output_dir);
         if (st != ZIP_OK) {
             fprintf(stderr, "Entpacken von Eintrag %u fehlgeschlagen: %s\n", i, zip_status_to_string(st));
             debug_log_step("Abbruch beim Entpacken von Eintrag %u: %s", i, zip_status_to_string(st));
@@ -308,6 +527,8 @@ int main(int argc, char** argv) {
 
 cleanup:
     free(data);
+    free(debug_path);
+    free(output_dir);
     if (g_debug_log) {
         debug_log_step("Programmende mit Rueckgabewert: %d", exit_code);
         fclose(g_debug_log);
