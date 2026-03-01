@@ -12,8 +12,14 @@ add_executable(decompress
 
 target_include_directories(decompress PRIVATE src)
 
+set(ZLIB_USE_STATIC_LIBS ON)
 find_package(ZLIB)
 if(ZLIB_FOUND)
     target_compile_definitions(decompress PRIVATE HAVE_ZLIB)
-    target_link_libraries(decompress PRIVATE ZLIB::ZLIB)
+    target_include_directories(decompress PRIVATE ${ZLIB_INCLUDE_DIRS})
+    if(WIN32 AND EXISTS "C:/msys64/ucrt64/lib/libz.a")
+        target_link_libraries(decompress PRIVATE "C:/msys64/ucrt64/lib/libz.a")
+    else()
+        target_link_libraries(decompress PRIVATE ZLIB::ZLIB)
+    endif()
 endif()
