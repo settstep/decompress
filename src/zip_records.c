@@ -434,9 +434,9 @@ int zip_extract_all(FILE *fp, const zip_eocd_t *eocd, const char *out_dir)
         }
 
         /* Build destination path */
-        size_t dir_len  = strlen(out_dir);
-        size_t name_len2 = strlen(cd.filename);
-        char *dest = (char *)malloc(dir_len + 1 + name_len2 + 1);
+        size_t dir_len      = strlen(out_dir);
+        size_t filename_len = strlen(cd.filename);
+        char *dest = (char *)malloc(dir_len + 1 + filename_len + 1);
         if (!dest) {
             zip_local_file_header_free(&lh);
             zip_central_dir_header_free(&cd);
@@ -444,24 +444,25 @@ int zip_extract_all(FILE *fp, const zip_eocd_t *eocd, const char *out_dir)
         }
         memcpy(dest, out_dir, dir_len);
         dest[dir_len] = '/';
-        memcpy(dest + dir_len + 1, cd.filename, name_len2 + 1);
+        memcpy(dest + dir_len + 1, cd.filename, filename_len + 1);
 
 #ifdef _WIN32
-        /* Normalise path separators on Windows */
-        for (size_t k = dir_len + 1; k < dir_len + 1 + name_len2; ++k)
+        /* Normalize path separators on Windows */
+        for (size_t k = dir_len + 1; k < dir_len + 1 + filename_len; ++k)
             if (dest[k] == '/') dest[k] = '\\';
 #endif
 
         /* Create any missing parent directories */
-        for (size_t k = dir_len + 2; k <= dir_len + 1 + name_len2; ++k) {
+        for (size_t k = dir_len + 2; k <= dir_len + 1 + filename_len; ++k) {
             if (dest[k] == '/' || dest[k] == '\\') {
+                size_t filename_offset = k - dir_len - 1;
                 dest[k] = '\0';
 #ifdef _WIN32
                 _mkdir(dest);
 #else
                 mkdir(dest, 0755);
 #endif
-                dest[k] = cd.filename[k - dir_len - 1];
+                dest[k] = cd.filename[filename_offset];
             }
         }
 

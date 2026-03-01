@@ -42,7 +42,14 @@ extern "C" {
 #define ZIP_ERR_MEMORY     -5
 #define ZIP_ERR_FORMAT     -6
 
-/** Convert a return code to a human-readable string. */
+/**
+ * Convert a ZIP return code to a human-readable string, analogous to the
+ * standard strerror(3) function.
+ *
+ * @param code  One of the ZIP_OK / ZIP_ERR_* constants.
+ * @return      A static, null-terminated string describing the code.
+ *              Never returns NULL.
+ */
 const char *zip_strerror(int code);
 
 /* -------------------------------------------------------------------------

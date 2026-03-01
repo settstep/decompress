@@ -1,0 +1,1 @@
+/tmp/codeql-scratch-939fda00c3c189b4/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/decompress.dir/link.d CMakeFiles/decompress.dir/src/main.c.o -o decompress  libziplib.a /usr/lib/x86_64-linux-gnu/libz.so
