@@ -21,6 +21,7 @@
 
 static FILE* g_debug_log = NULL;
 static void sanitize_name(char* name);
+static int normalize_entry_path(char* name);
 
 static int dir_exists(const char* path) {
     struct stat st;
@@ -154,7 +155,7 @@ static int has_data_descriptor(uint16_t flags) {
 
 static int is_directory_entry(const char* name) {
     size_t len = strlen(name);
-    return len > 0 && name[len - 1] == '/';
+    return len > 0 && (name[len - 1] == '/' || name[len - 1] == '\\');
 }
 
 static void sanitize_name(char* name) {
@@ -163,6 +164,45 @@ static void sanitize_name(char* name) {
             name[i] = '_';
         }
     }
+}
+
+static int normalize_entry_path(char* name) {
+    size_t segment_start = 0;
+
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+
+    if (name[0] == '/' || name[0] == '\\') {
+        return 0;
+    }
+
+    if (((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z')) && name[1] == ':') {
+        return 0;
+    }
+
+    for (size_t i = 0; name[i] != '\0'; ++i) {
+        if (name[i] == '\\') {
+            name[i] = '/';
+        } else if (name[i] == ':') {
+            name[i] = '_';
+        }
+    }
+
+    for (size_t i = 0;; ++i) {
+        if (name[i] == '/' || name[i] == '\0') {
+            size_t segment_len = i - segment_start;
+            if (segment_len == 2 && name[segment_start] == '.' && name[segment_start + 1] == '.') {
+                return 0;
+            }
+            if (name[i] == '\0') {
+                break;
+            }
+            segment_start = i + 1;
+        }
+    }
+
+    return 1;
 }
 
 static ZipStatus read_file_bytes(const char* path, uint8_t** out_data, size_t* out_size) {
@@ -239,6 +279,32 @@ static ZipStatus write_output_file(const char* output_dir, const char* name, con
     }
 
     snprintf(out_path, path_len, "%s/%s", output_dir, name);
+
+    {
+        char* dir_path = (char*)malloc(path_len);
+        if (!dir_path) {
+            free(out_path);
+            return ZIP_ERR_MEMORY;
+        }
+
+        memcpy(dir_path, out_path, path_len);
+        for (size_t i = 0; dir_path[i] != '\0'; ++i) {
+            if (dir_path[i] == '/' || dir_path[i] == '\\') {
+                char saved = dir_path[i];
+                dir_path[i] = '\0';
+                if (dir_path[0] != '\0' && !dir_exists(dir_path)) {
+                    if (MAKE_DIR(dir_path) != 0 && !dir_exists(dir_path)) {
+                        debug_log_step("Zwischenordner konnte nicht erstellt werden: %s", dir_path);
+                        free(dir_path);
+                        free(out_path);
+                        return ZIP_ERR_IO;
+                    }
+                }
+                dir_path[i] = saved;
+            }
+        }
+        free(dir_path);
+    }
 
     out = fopen(out_path, "wb");
     if (!out) {
@@ -352,7 +418,11 @@ static ZipStatus extract_one(
         return ZIP_OK;
     }
 
-    sanitize_name(file_name);
+    if (!normalize_entry_path(file_name)) {
+        debug_log_step("Ungueltiger Dateipfad im ZIP-Eintrag: %s", file_name);
+        free(file_name);
+        return ZIP_ERR_BAD_FORMAT;
+    }
 
     out = (uint8_t*)malloc(cdr->uncompressed_size > 0 ? cdr->uncompressed_size : 1);
     if (!out) {
